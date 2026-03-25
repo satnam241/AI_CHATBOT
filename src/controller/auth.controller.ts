@@ -10,39 +10,51 @@ import twilio from "twilio";
 import { generateOtp } from "../utils/generateOtp";
 import { saveOtp, getOtp, deleteOtp } from "../utils/otpStore";
 import client from "../utils/twilio";
-/* ================= SIGNUP ================= */
+import { sendOtpEmail } from "../utils/sendOtpEmail";
+
 export const sendOtp = async (req: Request, res: Response) => {
 
   try {
 
-    const { phone } = req.body;
+    const { email, phone } = req.body;
 
-    if (!phone) {
+    if (!email && !phone) {
       return res.status(400).json({
-        message: "Phone number required"
+        message: "Email or phone required"
       });
     }
 
     const otp = generateOtp();
 
-    saveOtp(phone, otp);
+    //const key = email || phone;
 
-    await client.messages.create({
-      body: `Your verification OTP is ${otp}`,
-      from: process.env.TWILIO_PHONE_NUMBER!,
-      to: phone
-    });
+    saveOtp(phone||email, otp);
+
+
+    /* Send OTP via Email */
+    if (email) {
+      await sendOtpEmail(email, otp);
+    }
+
+    /* Send OTP via SMS (optional) */
+    if (phone) {
+      await client.messages.create({
+        body: `Your OTP is ${otp}`,
+        from: process.env.TWILIO_PHONE_NUMBER!,
+        to: phone
+      });
+    }
 
     res.json({
       message: "OTP sent successfully"
     });
 
-  } catch (error: any) {
-    console.log("Twilio Error:", error.message);
-  
+  } catch (error) {
+
     res.status(500).json({
       message: "Failed to send OTP"
     });
+
   }
 };
 /* ================= SIGNUP ================= */
@@ -52,7 +64,15 @@ export const signup = async (req: Request, res: Response) => {
 
     const { name, email, phone, purpose, otp } = req.body;
 
-    const storedOtp = getOtp(phone);
+    const key = email || phone;
+
+    if (!key) {
+      return res.status(400).json({
+        message: "Email or phone required"
+      });
+    }
+
+    const storedOtp = getOtp(key);
 
     if (!storedOtp || storedOtp.otp !== otp) {
       return res.status(400).json({
@@ -61,13 +81,13 @@ export const signup = async (req: Request, res: Response) => {
     }
 
     if (Date.now() > storedOtp.expires) {
-      deleteOtp(phone);
+      deleteOtp(key);
       return res.status(400).json({
         message: "OTP expired"
       });
     }
 
-    deleteOtp(phone);
+    deleteOtp(key);
 
     const existingUser = await prisma.user.findFirst({
       where: {
@@ -87,7 +107,7 @@ export const signup = async (req: Request, res: Response) => {
         email,
         phone,
         purpose,
-        password: "otp_user" // required by schema
+        password: "otp_user"
       }
     });
 
@@ -109,11 +129,9 @@ export const signup = async (req: Request, res: Response) => {
     });
 
   } catch (error) {
-
     res.status(500).json({
       message: "Signup failed"
     });
-
   }
 };
 
@@ -122,9 +140,15 @@ export const login = async (req: Request, res: Response) => {
 
   try {
 
-    const { phone, otp } = req.body;
+    const { email, otp } = req.body;
 
-    const storedOtp = getOtp(phone);
+    if (!email) {
+      return res.status(400).json({
+        message: "Email required"
+      });
+    }
+
+    const storedOtp = getOtp(email);
 
     if (!storedOtp || storedOtp.otp !== otp) {
       return res.status(400).json({
@@ -133,16 +157,16 @@ export const login = async (req: Request, res: Response) => {
     }
 
     if (Date.now() > storedOtp.expires) {
-      deleteOtp(phone);
+      deleteOtp(email);
       return res.status(400).json({
         message: "OTP expired"
       });
     }
 
-    deleteOtp(phone);
+    deleteOtp(email);
 
     const user = await prisma.user.findUnique({
-      where: { phone }
+      where: { email }
     });
 
     if (!user) {
@@ -168,15 +192,13 @@ export const login = async (req: Request, res: Response) => {
     });
 
   } catch (error) {
-
     res.status(500).json({
       message: "Login failed"
     });
-
   }
 };
-/* ================= REFRESH TOKEN ================= */
 
+/* ================= REFRESH TOKEN ================= */
 export const refreshAccessToken = async (req: Request, res: Response) => {
 
   try {
